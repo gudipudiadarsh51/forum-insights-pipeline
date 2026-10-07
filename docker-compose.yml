@@ -1,0 +1,14 @@
+services:
+  # The only service in this repo: extracts from Hacker News + GitHub
+  # and lands raw records in GCS (Bronze) and, for records that fail
+  # validation, the dead letter queue. Transformation into Silver/Gold
+  # is a separate process, outside this codebase, that reads from GCS.
+  ingest:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-key.json
+    volumes:
+      - ${GCP_KEY_FILE:-./gcp-key.json}:/secrets/gcp-key.json:ro
+    command: ["python", "-m", "app.main"]
