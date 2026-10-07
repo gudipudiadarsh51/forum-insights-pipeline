@@ -54,6 +54,7 @@ from app.raw_extract import (
     raw_github_comment_dict,
     raw_github_issue_dict,
     raw_github_mention_dict,
+    raw_github_targeted_dict,
     raw_hn_hit_dict,
 )
 
@@ -122,6 +123,39 @@ def backfill_github_search(since: dt.datetime, until: dt.datetime, window_days: 
         writer.stop()
 
 
+def backfill_github_targeted(since: dt.datetime, until: dt.datetime, window_days: int) -> None:
+    writer = GCSBatchWriter("github/targeted")
+    writer.start()
+    try:
+        for category in github_client.TARGETED_CATEGORIES:
+            for repo in category.repos:
+                total = 0
+                for win_start, win_end in _iso_windows(since, until, window_days):
+                    try:
+                        for item in github_client.search_targeted(category, repo, win_start.isoformat(), win_end.isoformat()):
+                            try:
+                                writer.add(raw_github_targeted_dict(item, category.name))
+                            except Exception as e:
+                                send_to_dead_letter(
+                                    "github_targeted", item, e,
+                                    context={"category": category.name, "repo": repo, "backfill_window": str(win_start.date())},
+                                )
+                                continue
+                            total += 1
+                    except Exception:
+                        logger.exception(
+                            "GitHub targeted search failed for %s/%s, window %s to %s - continuing",
+                            category.name, repo, win_start.date(), win_end.date(),
+                        )
+                    time.sleep(_GITHUB_SEARCH_PACING_SECONDS)  # stay comfortably under 30 req/min
+                logger.info(
+                    "GitHub targeted %s/%s: %d hit(s) across %s to %s",
+                    category.name, repo, total, since.date(), until.date(),
+                )
+    finally:
+        writer.stop()
+
+
 def backfill_github_repos(since: dt.datetime) -> None:
     issues_writer = GCSBatchWriter("github/issues")
     comments_writer = GCSBatchWriter("github/comments")
@@ -161,8 +195,8 @@ def main() -> None:
     parser.add_argument("--since", help="Start date, YYYY-MM-DD. Overrides --years if both given.")
     parser.add_argument("--years", type=float, default=5, help="How many years back to backfill (default 5). Ignored if --since is given.")
     parser.add_argument(
-        "--sources", default="hackernews,github_search,github_repos",
-        help="Comma-separated subset to run: hackernews, github_search, github_repos",
+        "--sources", default="hackernews,github_search,github_repos,github_targeted",
+        help="Comma-separated subset to run: hackernews, github_search, github_repos, github_targeted",
     )
     parser.add_argument("--hn-window-days", type=int, default=7, help="HN sweep window size in days (default 7)")
     parser.add_argument("--github-search-window-days", type=int, default=30, help="GitHub search sweep window size in days (default 30)")
@@ -190,6 +224,8 @@ def main() -> None:
             backfill_github_search(since, until, args.github_search_window_days)
         if "github_repos" in sources:
             backfill_github_repos(since)
+        if "github_targeted" in sources:
+            backfill_github_targeted(since, until, args.github_search_window_days)
     finally:
         stop_dead_letter()
 
