@@ -44,6 +44,7 @@ from .raw_extract import (
     raw_github_comment_dict,
     raw_github_issue_dict,
     raw_github_mention_dict,
+    raw_github_targeted_dict,
     raw_hn_hit_dict,
 )
 
@@ -94,6 +95,17 @@ class IngestionService:
                 self._threads.append(threading.Thread(
                     target=self._run_with_backoff, args=(lambda: self._poll_github_mentions(mentions_writer),),
                     name="github-search", daemon=True,
+                ))
+            if config.github_targeted_enabled and github_client.TARGETED_CATEGORIES:
+                targeted_writer = GCSBatchWriter("github/targeted")
+                self._writers.append(targeted_writer)
+                logger.info(
+                    "GitHub targeted categories: %s",
+                    ", ".join(c.name for c in github_client.TARGETED_CATEGORIES),
+                )
+                self._threads.append(threading.Thread(
+                    target=self._run_with_backoff, args=(lambda: self._poll_github_targeted(targeted_writer),),
+                    name="github-targeted", daemon=True,
                 ))
 
         for writer in self._writers:
@@ -275,4 +287,39 @@ class IngestionService:
                 if count:
                     logger.info("GitHub search %r: %d mention(s)", keyword, count)
                     state.set_state(cursor_key, latest_ts)
+            self._stop_event.wait(config.github_poll_interval_seconds)
+
+    # -- GitHub: repo-scoped, categorized production-issue search -----------
+
+    def _poll_github_targeted(self, writer: GCSBatchWriter) -> None:
+        default_since = (
+            dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=config.github_lookback_minutes)
+        ).isoformat()
+
+        while not self._stop_event.is_set():
+            for category in github_client.TARGETED_CATEGORIES:
+                for repo in category.repos:
+                    cursor_key = f"github_targeted_since_{category.name}_{repo}"
+                    since_iso = state.get_state(cursor_key) or default_since
+                    latest_ts, count = since_iso, 0
+                    try:
+                        for item in github_client.search_targeted(category, repo, since_iso):
+                            try:
+                                writer.add(raw_github_targeted_dict(item, category.name))
+                            except Exception as e:
+                                dead_letter.send(
+                                    "github_targeted", item, e, context={"category": category.name, "repo": repo}
+                                )
+                                continue
+                            latest_ts = max(latest_ts, item.get("updated_at") or latest_ts)
+                            count += 1
+                    except Exception:
+                        logger.exception(
+                            "Failed to search GitHub targeted category %r on %s - continuing",
+                            category.name, repo,
+                        )
+                        continue
+                    if count:
+                        logger.info("GitHub targeted %s/%s: %d hit(s)", category.name, repo, count)
+                        state.set_state(cursor_key, latest_ts)
             self._stop_event.wait(config.github_poll_interval_seconds)
