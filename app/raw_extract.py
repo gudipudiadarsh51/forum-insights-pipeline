@@ -103,6 +103,36 @@ def raw_github_comment_dict(comment: Dict[str, Any], owner: str, repo: str) -> D
     }
 
 
+def raw_github_targeted_dict(item: Dict[str, Any], category: str) -> Dict[str, Any]:
+    """
+    From a TargetedCategory search hit (github_client.search_targeted).
+    Same shape as raw_github_mention_dict, plus `category` (which themed
+    query matched) and `labels`/`comments_count` - kept for downstream
+    reference even though the label/comment-count filtering already
+    happened server-side, at query time.
+    """
+    item_id = _require(item, "id", "GitHub search hit")
+    repo_url = item.get("repository_url") or ""
+    repo = repo_url.split("/repos/", 1)[-1] if "/repos/" in repo_url else None
+    return {
+        "id": str(item_id),
+        "repo": repo,
+        "number": item.get("number"),
+        "is_pull_request": "pull_request" in item,
+        "title": item.get("title"),
+        "body": item.get("body"),
+        "state": item.get("state"),
+        "author": (item.get("user") or {}).get("login"),
+        "labels": [l.get("name") for l in item.get("labels", []) if isinstance(l, dict)],
+        "comments_count": item.get("comments"),
+        "url": item.get("html_url"),
+        "category": category,
+        "created_at": item.get("created_at"),
+        "updated_at": item.get("updated_at"),
+        "ingested_at": _now_iso(),
+    }
+
+
 def raw_github_mention_dict(item: Dict[str, Any], matched_keyword: str) -> Dict[str, Any]:
     """
     From the site-wide Search API: an issue/PR anywhere on GitHub whose
