@@ -76,6 +76,11 @@ class Config:
     github_poll_interval_seconds: float = float(os.getenv("GITHUB_POLL_INTERVAL_SECONDS", "300"))
     github_lookback_minutes: int = int(os.getenv("GITHUB_LOOKBACK_MINUTES", "10080"))  # 7 days
 
+    # Mode 3: repo-scoped, categorized production-issue search - see
+    # github_client.TARGETED_CATEGORIES for the actual category/repo/
+    # keyword definitions (structured, so it lives in code, not here).
+    github_targeted_enabled: bool = os.getenv("GITHUB_TARGETED_ENABLED", "true").lower() == "true"
+
     # --- GCP project (used for GCS) ---
     gcp_project_id: str = os.getenv("GCP_PROJECT_ID", "")
 
