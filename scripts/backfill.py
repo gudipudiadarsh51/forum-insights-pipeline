@@ -43,7 +43,7 @@ import datetime as dt
 import logging
 import sys
 import time
-from typing import Iterator, Tuple
+from typing import Iterator, Optional, Tuple
 
 from app import github_client, hn_client
 from app.config import config
@@ -123,16 +123,20 @@ def backfill_github_search(since: dt.datetime, until: dt.datetime, window_days: 
         writer.stop()
 
 
-def backfill_github_targeted(since: dt.datetime, until: dt.datetime, window_days: int) -> None:
+def backfill_github_targeted(
+    since: dt.datetime, until: dt.datetime, window_days: int, only_repo: Optional[str] = None
+) -> None:
     writer = GCSBatchWriter("github/targeted")
     writer.start()
     try:
         for category in github_client.TARGETED_CATEGORIES:
             for repo in category.repos:
+                if only_repo and repo != only_repo:
+                    continue
                 total = 0
                 for win_start, win_end in _iso_windows(since, until, window_days):
                     try:
-                        for item in github_client.search_targeted(category, repo, win_start.isoformat(), win_end.isoformat()):
+                        for item in github_client.search_targeted_with_comments(category, repo, win_start.isoformat(), win_end.isoformat()):
                             try:
                                 writer.add(raw_github_targeted_dict(item, category.name))
                             except Exception as e:
@@ -200,6 +204,11 @@ def main() -> None:
     )
     parser.add_argument("--hn-window-days", type=int, default=7, help="HN sweep window size in days (default 7)")
     parser.add_argument("--github-search-window-days", type=int, default=30, help="GitHub search sweep window size in days (default 30)")
+    parser.add_argument(
+        "--repo", default=None,
+        help="Only for --sources github_targeted: limit to one repo (e.g. prisma/orm), "
+             "so a fix for one repo doesn't re-sweep and re-duplicate the others",
+    )
     args = parser.parse_args()
 
     try:
@@ -225,7 +234,7 @@ def main() -> None:
         if "github_repos" in sources:
             backfill_github_repos(since)
         if "github_targeted" in sources:
-            backfill_github_targeted(since, until, args.github_search_window_days)
+            backfill_github_targeted(since, until, args.github_search_window_days, only_repo=args.repo)
     finally:
         stop_dead_letter()
 
