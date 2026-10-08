@@ -142,13 +142,18 @@ _MIGRATION_CLI_REPOS: Tuple[str, ...] = ("liquibase/liquibase", "flyway/flyway",
 _ORM_REPOS: Tuple[str, ...] = ("prisma/orm", "typeorm/typeorm", "sqlalchemy/sqlalchemy")
 _GOVERNANCE_REPOS: Tuple[str, ...] = ("bytebase/bytebase", "ariga/atlas")
 
-# Comma within one label: qualifier is GitHub's documented OR syntax
-# (label:bug,regression matches either); separate -label: qualifiers AND
-# together, which is what's wanted for excluding both at once.
+# label:bug,regression was removed from here after direct testing
+# confirmed it silently zeroed out nearly all real signal: 978 matches
+# in prisma/orm, 236 in liquibase/liquibase, and 96 in bytebase/bytebase
+# all dropped to 0 the moment that filter was added, because none of
+# those repos actually use labels literally named "bug" or "regression"
+# - label taxonomy isn't portable across differently-governed repos the
+# way state/comments/exclusions are. If a specific repo's real label
+# names are known, pass them as a per-category extra_filters override
+# instead of changing this shared default.
 _DEFAULT_TARGETED_FILTERS: Tuple[str, ...] = (
     "state:closed",
     "comments:>3",
-    "label:bug,regression",
     "-label:invalid",
     "-label:question",
 )
