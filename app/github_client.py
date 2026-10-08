@@ -128,9 +128,18 @@ def search_issues(keyword: str, since_iso: str, until_iso: Optional[str] = None)
 # workaround, a maintainer's diagnosis) - see dbeaver/dbeaver#17108,
 # which only made sense read across three separate comments.
 
-_DESKTOP_GUI_REPOS: Tuple[str, ...] = ("dbeaver/dbeaver", "microsoft/azuredatastudio", "schemacrawler/SchemaCrawler")
+# dbeaver/dbeaver deliberately excluded: it's already in
+# config.github_oss_repos, which polls 100% of its issues/comments
+# unfiltered - a strict superset of anything a keyword search here
+# could find. Searching it again would just refetch data already
+# sitting in github/issues and github/comments.
+_DESKTOP_GUI_REPOS: Tuple[str, ...] = ("microsoft/azuredatastudio", "schemacrawler/SchemaCrawler")
 _MIGRATION_CLI_REPOS: Tuple[str, ...] = ("liquibase/liquibase", "flyway/flyway", "golang-migrate/migrate")
-_ORM_REPOS: Tuple[str, ...] = ("prisma/prisma", "typeorm/typeorm", "sqlalchemy/sqlalchemy")
+# prisma/prisma was renamed to prisma/orm - GitHub's Search API `repo:`
+# qualifier does NOT follow repo renames (unlike the website and most
+# REST endpoints), so the old name 422s with a misleading "does not
+# exist" error. Confirmed live: prisma/orm returns results correctly.
+_ORM_REPOS: Tuple[str, ...] = ("prisma/orm", "typeorm/typeorm", "sqlalchemy/sqlalchemy")
 _GOVERNANCE_REPOS: Tuple[str, ...] = ("bytebase/bytebase", "ariga/atlas")
 
 # Comma within one label: qualifier is GitHub's documented OR syntax
@@ -197,3 +206,34 @@ def search_targeted(
     params: Dict[str, Any] = {"q": query, "sort": "created", "order": "asc"}
     yield from _paginate_search(f"{API_BASE}/search/issues", params)
 
+
+def list_comments_for_issue(owner: str, repo: str, issue_number: int) -> Iterator[Dict[str, Any]]:
+    """All comments on one specific issue/PR - usually few, but paginated for safety."""
+    yield from _paginate(f"{API_BASE}/repos/{owner}/{repo}/issues/{issue_number}/comments", {})
+
+
+def search_targeted_with_comments(
+    category: TargetedCategory, repo: str, since_iso: str, until_iso: Optional[str] = None
+) -> Iterator[Dict[str, Any]]:
+    """
+    Like search_targeted(), but each yielded item also carries its full
+    comment thread under "_comments".
+
+    Why this exists: GitHub's search matches on title, body, AND
+    comments by default, but the response it returns only ever contains
+    the issue's own title/body - never the comment that actually
+    matched. A hit here can be comment-driven with nothing relevant in
+    the stored title/body at all unless the comments are fetched too.
+
+    This also avoids the OSS-repo poller's issues/comments-in-separate-
+    buckets split, which makes thread reassembly require a downstream
+    SQL join - here, the thread is already fully assembled at
+    extraction time, one record per match.
+    """
+    owner, repo_name = repo.split("/", 1)
+    for item in search_targeted(category, repo, since_iso, until_iso):
+        issue_number = item.get("number")
+        comments = list(list_comments_for_issue(owner, repo_name, issue_number)) if issue_number else []
+        item = dict(item)
+        item["_comments"] = comments
+        yield item
